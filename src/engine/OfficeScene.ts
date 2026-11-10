@@ -1,12 +1,14 @@
 import { ArcRotateCamera, Color3, Color4, DirectionalLight, DynamicTexture, Engine, HemisphericLight, Mesh, MeshBuilder, PBRMaterial, Scene, ShadowGenerator, StandardMaterial, Texture, TransformNode, Vector3 } from '@babylonjs/core';
 import { ASSETS, MODEL_FIXES, WorkstationSlot, assetUrl } from '../assets/AssetRegistry';
-import { FitAxis, placeModel } from '../assets/ModelLoader';
+import { FitAxis, PlaceOptions, placeModel } from '../assets/ModelLoader';
 import { CHAIR_HEIGHT, DESK, STATIONS, Station } from '../game/layout';
 import type { Task } from '../game/store';
 
 /** Dónde va cada accesorio en un puesto (coordenadas locales: el gato mira a +Z). */
 interface PropSlot { slot: WorkstationSlot; at: [number, number, number]; yaw: number; fit: FitAxis; size: number; hides?: string[]; shadow?: boolean; }
 const T = DESK.top;
+/** Esquinas con planta (lejos de muebles y paredes). */
+const PLANTS: [number, number][] = [[-13.9, 7.6], [13.4, 8.8], [-13.8, -7.6], [13.4, -7.4], [-3.6, 9.2], [8.2, 9.2]];
 const STATION_PROPS: PropSlot[] = [
   { slot: 'chair', at: [0, 0, 0], yaw: 0, fit: 'height', size: CHAIR_HEIGHT, hides: ['chair'], shadow: true },
   { slot: 'monitor', at: [0, T, 1.22], yaw: Math.PI, fit: 'max', size: 0.88, hides: ['monitor', 'screen-glow'], shadow: true },
@@ -79,11 +81,12 @@ export class OfficeScene {
     const m = new StandardMaterial('signmat-' + text, this.scene); m.diffuseTexture = t; m.opacityTexture = t; m.emissiveColor = Color3.FromHexString(color); m.disableLighting = true; m.backFaceCulling = false; p.material = m; return p;
   }
 
-  private async place(file: string, parent: TransformNode, fit: FitAxis, size: number, pick?: string, hides: string[] = [], shadow = false) {
+  private async place(file: string, parent: TransformNode, fit: FitAxis, size: number, pick?: string, hides: string[] = [], shadow = false, extra: Partial<PlaceOptions> = {}) {
     try {
-      const placed = await placeModel(this.scene, assetUrl(file), parent, { fit, size, pick, isStatic: true, ...MODEL_FIXES[file] });
+      const placed = await placeModel(this.scene, assetUrl(file), parent, { fit, size, pick, isStatic: true, ...MODEL_FIXES[file], ...extra });
       if (shadow) placed.meshes.forEach(m => this.shadows.addShadowCaster(m, false));
-      hides.forEach(name => this.scene.getMeshByName(name)?.dispose());
+      // Retira los marcadores provisionales (todas las piezas con ese nombre).
+      this.scene.meshes.filter(m => hides.includes(m.name)).forEach(m => m.dispose());
       return placed;
     } catch (error) { console.warn(`No se pudo cargar ${file}; se mantiene el marcador provisional.`, error); return undefined; }
   }
@@ -91,11 +94,14 @@ export class OfficeScene {
   private async loadStation(s: Station) {
     const root = this.stationRoots.get(s.key)!;
     const assets = ASSETS.workstations[s.key];
-    await Promise.all(STATION_PROPS.map(p => {
-      const holder = new TransformNode(`${s.key}-${p.slot}`, this.scene);
-      holder.parent = root; holder.position.set(...p.at); holder.rotation.y = p.yaw;
-      return this.place(assets[p.slot], holder, p.fit, p.size, `monitor-${s.key}`, (p.hides ?? []).map(h => `${h}-${s.key}`), p.shadow);
-    }));
+    const holder = (name: string, x: number, y: number, z: number, yaw = 0) => { const n = new TransformNode(`${s.key}-${name}`, this.scene); n.parent = root; n.position.set(x, y, z); n.rotation.y = yaw; return n; };
+    const pick = `monitor-${s.key}`;
+    await Promise.all([
+      ...STATION_PROPS.map(p => this.place(assets[p.slot], holder(p.slot, ...p.at, p.yaw), p.fit, p.size, pick, (p.hides ?? []).map(h => `${h}-${s.key}`), p.shadow)),
+      // Mesa real ajustada exactamente al tamaño del escritorio.
+      this.place(ASSETS.desks[s.key], holder('desk-model', 0, 0, DESK.centerZ), 'height', DESK.top, pick, [`desk-${s.key}`, `desk-leg-${s.key}`, `desk-panel-${s.key}`], true, { box: { x: DESK.width, y: DESK.top, z: DESK.depth } }),
+      this.place(ASSETS.shared.organizer, holder('organizer', -0.6, T, 1.32, Math.PI * 1.1), 'height', .24, pick)
+    ]);
   }
 
   private async loadSharedProps() {
@@ -108,6 +114,20 @@ export class OfficeScene {
       jobs.push(this.place(ASSETS.shared.meetingChair, at(`meeting-chair-front-${i}`, x, 0, 3.45, 0), 'height', CHAIR_HEIGHT, undefined, [`meeting-chair-${i}`], true));
       jobs.push(this.place(ASSETS.shared.meetingChair, at(`meeting-chair-back-${i}`, x, 0, 6.55, Math.PI), 'height', CHAIR_HEIGHT, undefined, [`meeting-chair-${i + 3}`], true));
     });
+    // Mesa de reuniones (madera natural) y pizarra al fondo de la sala.
+    jobs.push(this.place(ASSETS.shared.meetingTable, at('meeting-table-model', -7, 0, 5), 'height', .9, undefined, ['meeting-table', 'meeting-table-leg'], true, { box: { x: 4.8, y: .9, z: 2 } }));
+    jobs.push(this.place(ASSETS.shared.whiteboard, at('whiteboard', -10.7, 0, 5, Math.PI / 2), 'height', 1.9, 'board', [], true));
+    // Plantas de interior en las esquinas.
+    PLANTS.forEach(([x, z], i) => jobs.push(this.place(ASSETS.shared.plant, at(`plant-${i}`, x, 0, z, i * 1.7), 'height', 1.9, undefined, ['plant-pot', 'plant-leaf'], true)));
+    // Sala de servidores: fila de racks con el frente hacia la oficina + un servidor torre.
+    jobs.push(this.place(ASSETS.shared.serverRack, at('server-racks', 11.5, 0, -1, -Math.PI / 2), 'height', 2.3, undefined, ['server-room', 'server-rack', 'server-led'], true));
+    jobs.push(this.place(ASSETS.shared.serverTower, at('server-tower', 11.3, 0, 1.75, -Math.PI / 2), 'height', 1.1, undefined, [], true));
+    // Cajas archivadoras apiladas junto a las paredes.
+    jobs.push(this.place(ASSETS.shared.fileStorage, at('files-pm-1', -13.9, 0, -4, Math.PI / 2), 'width', .8, undefined, [], true));
+    jobs.push(this.place(ASSETS.shared.fileStorage, at('files-pm-2', -13.9, .52, -4.05, Math.PI / 2 + .12), 'width', .8));
+    jobs.push(this.place(ASSETS.shared.fileStorage, at('files-pm-3', -13.9, 0, -5, Math.PI / 2 - .08), 'width', .8, undefined, [], true));
+    jobs.push(this.place(ASSETS.shared.fileStorage, at('files-board', 3.6, 0, 9.3, Math.PI), 'width', .8, undefined, [], true));
+    jobs.push(this.place(ASSETS.shared.fileStorage, at('files-board-2', 3.62, .52, 9.28, Math.PI - .1), 'width', .8));
     jobs.push(this.place(ASSETS.shared.mug, at('meeting-mug', -8.4, .9, 4.7, 1.2), 'height', .16));
     jobs.push(this.place(ASSETS.shared.spareHeadset, at('meeting-headset', -5.6, .9, 5.3, -0.4), 'height', .28));
     await Promise.all(jobs);
@@ -157,9 +177,10 @@ export class OfficeScene {
     this.box('coffee-bar', new Vector3(-11, .475, 9.3), new Vector3(4, .95, .9), '#744f4c', { cast: true }); this.box('coffee-bar-top', new Vector3(-11, .965, 9.3), new Vector3(4.1, .03, 1), '#d9c3a0');
     this.box('coffee-machine', new Vector3(-11.5, 1.25, 9.25), new Vector3(.5, .6, .45), '#d4c2a2', { pick: true }).metadata = { pick: 'coffee-machine' };
     this.sign('CAFÉ', new Vector3(-11, 2.15, 9.6), 2.2, '#ffcc75');
-    // Plantas.
+    this.box('server-floor', new Vector3(11.6, .015, -0.3), new Vector3(2.6, .03, 5.8), '#151d33');
+    // Plantas (provisionales hasta que carga el modelo).
     const leafMat = new PBRMaterial('leaf-mat', this.scene); leafMat.albedoColor = Color3.FromHexString('#3f9a6e'); leafMat.roughness = .9; leafMat.metallic = 0;
-    for (const [x, z] of [[-13.6, 8.6], [13, 8.6], [-13.6, -7], [13, -7]]) {
+    for (const [x, z] of PLANTS) {
       this.box('plant-pot', new Vector3(x, .35, z), new Vector3(.6, .7, .6), '#d68b68', { cast: true });
       for (const [dx, dy, dz, r] of [[0, 1.15, 0, .55], [.25, 1.45, .1, .4], [-.22, 1.4, -.12, .42], [.05, 1.75, 0, .32]]) { const leaf = MeshBuilder.CreateSphere('plant-leaf', { diameter: r * 2, segments: 8 }, this.scene); leaf.position.set(x + dx, dy, z + dz); leaf.material = leafMat; leaf.isPickable = false; }
     }

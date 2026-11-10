@@ -15,6 +15,8 @@ export interface PlaceOptions {
   pick?: string;
   /** Objeto que nunca se mueve: se congela su matriz y su material (más rápido). */
   isStatic?: boolean;
+  /** Si se indica, el modelo se ajusta exactamente a estas medidas (ancho x, alto y, fondo z). Útil para mesas. */
+  box?: { x: number; y: number; z: number };
 }
 
 export interface PlacedModel { node: TransformNode; meshes: AbstractMesh[]; size: Vector3; }
@@ -47,6 +49,9 @@ function loadContainer(scene: Scene, url: string): Promise<AssetContainer> {
   }
   return pending;
 }
+
+/** Descarga un modelo por adelantado (sin colocarlo) para que aparezca al instante cuando se necesite. */
+export function preloadModel(scene: Scene, url: string) { return loadContainer(scene, url).then(() => undefined); }
 
 /**
  * Coloca un modelo glTF bajo `parent`:
@@ -95,9 +100,10 @@ async function placeModelInner(scene: Scene, url: string, parent: TransformNode,
 
   const dims = max.subtract(min);
   const measured = opts.fit === 'height' ? dims.y : opts.fit === 'width' ? dims.x : opts.fit === 'depth' ? dims.z : Math.max(dims.x, dims.y, dims.z);
-  const scale = opts.size / Math.max(measured, 1e-4);
-  fit.scaling.setAll(scale);
-  fit.position.set(-(min.x + max.x) / 2 * scale, -min.y * scale, -(min.z + max.z) / 2 * scale);
+  const uniform = opts.size / Math.max(measured, 1e-4);
+  const sc = opts.box ? new Vector3(opts.box.x / Math.max(dims.x, 1e-4), opts.box.y / Math.max(dims.y, 1e-4), opts.box.z / Math.max(dims.z, 1e-4)) : new Vector3(uniform, uniform, uniform);
+  fit.scaling.copyFrom(sc);
+  fit.position.set(-(min.x + max.x) / 2 * sc.x, -min.y * sc.y, -(min.z + max.z) / 2 * sc.z);
   fit.parent = parent;
 
   for (const mesh of meshes) {
@@ -108,5 +114,5 @@ async function placeModelInner(scene: Scene, url: string, parent: TransformNode,
     if (opts.pick) mesh.metadata = { ...(mesh.metadata ?? {}), pick: opts.pick };
     if (opts.isStatic) { const chain: TransformNode[] = []; for (let n: any = mesh; n; n = n.parent) chain.unshift(n); chain.forEach(n => n.computeWorldMatrix(true)); mesh.freezeWorldMatrix(); mesh.doNotSyncBoundingInfo = true; mesh.material?.freeze(); }
   }
-  return { node: fit, meshes, size: dims.scale(scale) };
+  return { node: fit, meshes, size: dims.multiply(sc) };
 }

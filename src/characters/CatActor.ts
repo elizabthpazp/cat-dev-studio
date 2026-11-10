@@ -35,6 +35,9 @@ export class CatActor {
     } catch (error) { console.warn(`No se pudo cargar el modelo de ${this.cat.name}; se usará el sustituto.`, error); }
   }
 
+  /** Gira al gato (sentado o de pie) para mirar un punto. */
+  face(point: Vector3) { this.root.rotation.y = Math.atan2(point.x - this.root.position.x, point.z - this.root.position.z); this.arriveYaw = undefined; }
+
   /** Lo sienta directamente en su silla mirando hacia `yaw` (hacia su PC). */
   sitAt(seat: Vector3, yaw: number) {
     this.seat.copyFrom(seat); this.seatYaw = yaw; this.seated = true; this.returnToSeat = false; this.arriveYaw = undefined;

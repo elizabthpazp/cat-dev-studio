@@ -16,7 +16,8 @@ const TIPS = [
   'Una mala decisión deja escapar un bug. Con cinco bugs, producción arde.',
   'El reloj no perdona: termina el despliegue antes de las 18:00.',
   'Haz clic en el gato con «!» para recibir su encargo.',
-  'Pulsa H durante la partida para ver todos los controles.'
+  'Pulsa H durante la partida para ver todos los controles.',
+  '¿Un bug suelto por la oficina? Haz clic en él y cae el martillo.'
 ];
 const STATUS_LABEL = (t: Task, s: State) => t.status === 'completed' ? 'Hecho' : t.status === 'working' ? `${Math.round(t.progress)}%` : activeTask(s) === t ? 'Listo' : 'Bloqueado';
 
@@ -104,7 +105,7 @@ export class GameUI {
     this.openScroll(`<div class="kicker">LUNES · 08:40</div><h2>El Encargo</h2><div class="ornament">❦</div>
       <p class="dropcap">El cliente más impaciente del mundo quiere <b>Meowboard</b>, un tablero de tareas, en producción <b>antes de las 18:00</b>.</p>
       <p>Guía a tu equipo de gatos por cinco hitos. En cada uno tendrás que tomar una decisión: acierta y el trabajo avanza; falla y se colará un bug.</p>
-      <ul class="rules"><li><b>5 bugs</b> y producción arde.</li><li>Sin <b>moral</b>, el equipo se rinde.</li><li>Los gatos cansados trabajan lento: dales <b>café</b>.</li></ul>
+      <ul class="rules"><li><b>5 bugs</b> y producción arde. Cada bug aparece caminando por la oficina: <b>aplástalo con el martillo</b> haciendo clic.</li><li>Sin <b>moral</b>, el equipo se rinde.</li><li>Los gatos cansados trabajan lento: dales <b>café</b>.</li></ul>
       <div class="scroll-actions"><button class="btn primary" data-act="accept">Aceptar el encargo</button></div>`,
     { onAction: act => { if (act === 'accept') { sfx.click(); this.closeModal(true); this.hideScreens(); this.h.beginShift(); } }, closable: false });
   }
@@ -132,7 +133,7 @@ export class GameUI {
         <button class="action" data-act="overview">${keycap('V')}<span>Vista</span></button>
         <button class="action" data-act="help">${keycap('H')}<span>Ayuda</span></button>
       </div>
-      <div class="legend panel"><div class="legend-row">${keycap('Clic')} Elegir gato</div><div class="legend-row">${keycap('Arrastrar')} Girar</div><div class="legend-row">${keycap('Rueda')} Zoom</div><div class="legend-row">${keycap('1')}–${keycap('4')} Equipo</div><div class="legend-row">${keycap('Esc')} Pausa</div></div>`;
+      <div class="legend panel"><div class="legend-row">${keycap('Clic')} Elegir gato</div><div class="legend-row">${keycap('Arrastrar')} Girar</div><div class="legend-row">${keycap('Rueda')} Zoom</div><div class="legend-row">${keycap('1')}–${keycap('4')} Equipo</div><div class="legend-row">${keycap('Clic')} 🐞 Aplastar bug</div><div class="legend-row">${keycap('Esc')} Pausa</div></div>`;
     const list = this.hud.querySelector('.quest-list')!;
     ['spec', 'feature', 'review', 'qa', 'deploy'].forEach(id => { const li = el('li', 'q', `<span class="q-ico"></span><span class="q-name"></span><span class="q-state"></span>`); li.dataset.task = id; list.append(li); this.refs['q-' + id] = li; });
     const party = this.hud.querySelector('.party')!;
@@ -228,7 +229,7 @@ export class GameUI {
       <p>${c.question}</p><pre class="ink">${c.code.replace(/</g, '&lt;')}</pre>
       <div class="options">${options.map((op, i) => `<button class="option" data-act="opt" data-i="${i}"><span class="letter">${'ABC'[i]}</span><span>${op.text}</span></button>`).join('')}</div>
       <div class="verdict"></div>
-      <div class="cost">Si fallas: <b>+1 bug</b> · <b>−8 presupuesto</b> · <b>−8 moral</b></div>`;
+      <div class="cost">Si fallas: <b>+1 bug suelto</b> · <b>−8 presupuesto</b> · <b>−8 moral</b></div>`;
     let answered = false;
     const scroll = this.openScroll(html, {
       onAction: (act, btn) => {
@@ -254,7 +255,7 @@ export class GameUI {
         <div>${keycap('Clic')}<span>Elegir gato / abrir encargo</span></div><div>${keycap('Arrastrar')}<span>Girar la cámara</span></div>
         <div>${keycap('Rueda')}<span>Acercar / alejar</span></div><div>${keycap('1')}${keycap('2')}${keycap('3')}${keycap('4')}<span>Seleccionar gato</span></div>
         <div>${keycap('ESPACIO')}<span>Ver encargo actual</span></div><div>${keycap('C')}<span>Café al gato elegido</span></div>
-        <div>${keycap('V')}<span>Vista general</span></div><div>${keycap('Esc')}<span>Pausa</span></div><div>${keycap('H')}<span>Esta ayuda</span></div><div>${keycap('M')}<span>Silenciar sonido</span></div>
+        <div>${keycap('V')}<span>Vista general</span></div><div>${keycap('Esc')}<span>Pausa</span></div><div>${keycap('H')}<span>Esta ayuda</span></div><div>${keycap('M')}<span>Silenciar sonido</span></div><div>${keycap('Clic')} 🐞<span>Aplastar un bug (−10)</span></div>
       </div>
       <div class="icon-legend"><div><span class="sw energy"></span>Energía: más alta, trabaja más rápido</div><div><span class="sw stress"></span>Estrés: sube al fallar, baja descansando</div><div><span>❤</span>Moral: si llega a 0, pierdes</div><div><span>🐞</span>Bugs: con 5, pierdes</div></div>
       <div class="scroll-actions"><button class="btn primary" data-act="close">Entendido</button></div>`,
@@ -273,14 +274,33 @@ export class GameUI {
     this.modalLayer.append(p); (p.querySelector('button') as HTMLButtonElement).focus();
   }
 
+  hideHud() { this.hud.classList.remove('is-on'); this.tagLayer.classList.remove('is-on'); }
+
+  /** Aviso rojo a pantalla completa (alarma de producción). */
+  alert(text: string) {
+    this.root.querySelector('.alarm')?.remove();
+    const a = el('div', 'alarm', `<div class="alarm-text">⚠ ${text} ⚠</div>`); this.root.append(a);
+    window.setTimeout(() => a.classList.add('fade'), 1900); window.setTimeout(() => a.remove(), 2600);
+  }
+
+  /** Presentación del jefe final, como en los videojuegos: nombre gigante y barra de vida. */
+  bossIntro(name: string, title: string) {
+    this.hideBoss();
+    const b = el('div', 'boss-intro', `<div class="boss-card"><small>¡HA APARECIDO EL JEFE FINAL!</small><h1>${name}</h1><p>${title}</p></div>
+      <div class="boss-bar"><div class="boss-bar-name">${name} <span>Nv. 99</span></div><div class="boss-hp"><i></i></div></div>`);
+    this.root.append(b);
+  }
+  hideBoss() { this.root.querySelectorAll('.boss-intro, .alarm').forEach(e => e.remove()); }
+
   showEnd(s: State) {
     const o = s.outcome!; this.closeModal(true); this.hud.classList.remove('is-on'); this.tagLayer.classList.remove('is-on');
     const stars = [0, 1, 2].map(i => `<span class="star ${i < o.stars ? 'on' : ''}" style="animation-delay:${.4 + i * .25}s">★</span>`).join('');
-    const end = el('div', 'shade end', `<div class="end-card ${o.won ? 'won' : 'lost'}"><div class="banner">${o.won ? '¡SPRINT COMPLETADO!' : 'SPRINT FALLIDO'}</div>
-      <div class="stars">${stars}</div><p class="reason">${o.reason}</p>
+    this.root.querySelector('.boss-card')?.classList.add('gone');
+    const end = el('div', 'shade end' + (o.won ? '' : ' defeat'), `<div class="end-card ${o.won ? 'won' : 'lost'}"><div class="banner">${o.won ? '¡SPRINT COMPLETADO!' : 'DERROTA'}</div>
+      ${o.won ? `<div class="stars">${stars}</div>` : `<div class="defeated-by">Te ha derrotado <b>BUGZILLA</b>, el jefe final</div>`}<p class="reason">${o.reason}</p>
       <div class="stats"><div><small>HORA</small><b>${clock(s.time)}</b></div><div><small>HITOS</small><b>${completedCount(s)}/5</b></div><div><small>BUGS</small><b>${s.bugs}</b></div><div><small>MORAL</small><b>${Math.round(s.morale)}%</b></div></div>
       <div class="end-actions"><button class="btn primary" data-e="again">Jugar otra vez</button><button class="btn ghost" data-e="menu">Menú principal</button></div></div>`);
-    end.addEventListener('click', e => { const a = (e.target as HTMLElement).closest<HTMLElement>('[data-e]')?.dataset.e; if (!a) return; sfx.click(); end.remove(); a === 'again' ? this.h.restart() : this.h.quit(); });
+    end.addEventListener('click', e => { const a = (e.target as HTMLElement).closest<HTMLElement>('[data-e]')?.dataset.e; if (!a) return; sfx.click(); end.remove(); this.hideBoss(); a === 'again' ? this.h.restart() : this.h.quit(); });
     this.modalLayer.append(end);
   }
 

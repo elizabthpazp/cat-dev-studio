@@ -275,3 +275,31 @@ pre.ink { margin: 12px 0 16px; padding: 12px 16px; white-space: pre-wrap; font: 
   .quest { display: none; } .resources { gap: 6px; } .res { padding: 6px 8px; } .res-ico { width: 28px; height: 28px; font-size: 14px; } .res b { font-size: 18px; }
   .action { min-width: 60px; } .paper-inner { padding: 24px 26px 30px; } .legend-grid, .icon-legend { grid-template-columns: 1fr; }
 }
+
+/* ───────── Jefe final ───────── */
+.alarm { position: absolute; inset: 0; z-index: 30; display: grid; place-items: center; pointer-events: none;
+  box-shadow: inset 0 0 160px 40px rgba(255, 30, 40, .75); animation: alarmPulse .45s ease-in-out infinite alternate; transition: opacity .6s; }
+.alarm.fade { opacity: 0; }
+.alarm-text { font: clamp(34px, 6vw, 72px) var(--display); color: #fff; letter-spacing: .06em; -webkit-text-stroke: 3px #5a0006; paint-order: stroke fill;
+  text-shadow: 0 6px 0 #5a0006, 0 0 30px rgba(255, 40, 50, .9); animation: shakeX .12s linear infinite; }
+@keyframes alarmPulse { from { background: rgba(255, 0, 20, .05); } to { background: rgba(255, 0, 20, .22); } }
+@keyframes shakeX { 0% { transform: translate(-3px, 1px); } 50% { transform: translate(3px, -1px); } 100% { transform: translate(-3px, 1px); } }
+.boss-intro { position: absolute; inset: 0; z-index: 12; pointer-events: none; }
+.boss-card { position: absolute; left: 0; right: 0; top: 18%; text-align: center; animation: bossIn .7s cubic-bezier(.2, 1.4, .4, 1) both; transition: opacity .5s, transform .5s; }
+.boss-card.gone { opacity: 0; transform: translateY(-30px); }
+.boss-card small { display: inline-block; padding: 6px 18px; font: 18px var(--display); letter-spacing: .18em; color: #ffd0d0; background: rgba(120, 0, 10, .75); border: 2px solid #ff4b55; border-radius: 8px; }
+.boss-card h1 { margin: 8px 0 0; font: clamp(64px, 12vw, 150px) var(--display); line-height: .9; color: #ff3b47; letter-spacing: .04em;
+  -webkit-text-stroke: 5px #2a0004; paint-order: stroke fill; text-shadow: 0 8px 0 #6b000a, 0 14px 0 #2a0004, 0 0 50px rgba(255, 30, 40, .7); }
+.boss-card p { margin: 6px 0 0; font: italic 26px 'IM Fell English', Georgia, serif; color: #ffe1e1; text-shadow: 0 2px 6px #000; }
+@keyframes bossIn { from { opacity: 0; transform: scale(2.4); filter: blur(6px); } }
+.boss-bar { position: absolute; top: 20px; left: 50%; width: min(720px, calc(100vw - 40px)); transform: translateX(-50%); animation: rise .5s .3s ease both; }
+.boss-bar-name { font: 22px var(--display); color: #fff; letter-spacing: .1em; text-shadow: 0 2px 0 #000; margin-bottom: 6px; }
+.boss-bar-name span { color: #ffb4b4; font-size: 16px; margin-left: 8px; }
+.boss-hp { height: 22px; border: 3px solid #1a0003; border-radius: 6px; background: #2a0508; box-shadow: 0 0 0 2px #7a1a20, 0 6px 14px rgba(0, 0, 0, .6); overflow: hidden; }
+.boss-hp i { display: block; height: 100%; width: 0; background: linear-gradient(#ff6a6a, #c4101c); box-shadow: inset 0 3px 0 rgba(255, 255, 255, .35); animation: hpFill 1.4s .5s ease-out forwards; }
+@keyframes hpFill { to { width: 100%; } }
+.shade.end.defeat { place-items: end center; padding-bottom: 28px; background: linear-gradient(transparent 35%, rgba(20, 0, 4, .85)); }
+.defeat .end-card { width: min(620px, calc(100vw - 32px)); }
+.defeat .banner { background: linear-gradient(#ff5a5a, #8a0c16); }
+.defeated-by { margin: 10px 0 2px; font: 20px var(--display); letter-spacing: .04em; color: #ffb4b4; }
+.defeated-by b { color: #ff4b55; font-weight: 400; }

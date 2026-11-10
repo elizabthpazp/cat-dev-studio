@@ -4,9 +4,11 @@ import { CatActor } from '../characters/CatActor';
 import { GameUI, TagInfo } from '../ui/GameUI';
 import { sfx } from '../ui/sfx';
 import { ASSETS, assetUrl } from '../assets/AssetRegistry';
-import { loadStats } from '../assets/ModelLoader';
-import { CAT_HEIGHT, SEATED_Y, SPOTS, STATIONS, seatOf } from './layout';
-import { COFFEE_COOLDOWN, COFFEE_COST, DEADLINE, MAX_BUGS, ROLES, Role, SECONDS_PER_MINUTE, Task, activeTask, game, log } from './store';
+import { loadStats, preloadModel } from '../assets/ModelLoader';
+import { BugSwarm } from '../engine/Bugs';
+import { BOSS, BossBug } from '../engine/Boss';
+import { CAT_HEIGHT, SEATED_Y, SPOTS, STATIONS, seatOf, stationPoint } from './layout';
+import { COFFEE_COOLDOWN, COFFEE_COST, DEADLINE, MAX_BUGS, ROLES, Role, SECONDS_PER_MINUTE, SMASH_COST, Task, activeTask, game, log } from './store';
 
 type Phase = 'loading' | 'title' | 'intro' | 'playing' | 'paused' | 'ended';
 interface CamPose { alpha: number; beta: number; radius: number; target: Vector3; }
@@ -17,13 +19,15 @@ const WORK_LABEL: Record<string, string> = { spec: 'Definiendo el encargo', feat
 export class Game {
   /** Multiplicador de velocidad (solo para pruebas). */
   timeScale = 1;
-  engine: Engine; office: OfficeScene; ui: GameUI; actors = new Map<Role, CatActor>();
+  engine: Engine; office: OfficeScene; ui: GameUI; actors = new Map<Role, CatActor>(); bugs: BugSwarm; boss: BossBug;
   private phase: Phase = 'loading'; private last = performance.now(); private hudClock = 0; private minuteClock = 0; private saveClock = 0;
   private camGoal?: CamPose; private projection = Matrix.Identity();
 
   constructor(canvas: HTMLCanvasElement, root: HTMLDivElement) {
     this.engine = new Engine(canvas, true, { stencil: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' }, false);
     this.office = new OfficeScene(this.engine);
+    this.bugs = new BugSwarm(this.office.scene, this.office.shadows);
+    this.boss = new BossBug(this.office.scene, this.office.shadows);
     this.ui = new GameUI(root, {
       newGame: () => this.newGame(), continueGame: () => this.continueGame(), beginShift: () => this.beginShift(),
       select: role => this.select(role, true), assign: () => this.openActiveTask(), answer: (id, ok) => this.answer(id, ok),
@@ -43,7 +47,8 @@ export class Game {
     this.setCamera(TITLE_POSE); this.office.camera.detachControl();
     this.office.drawBoard(s.tasks);
     this.ui.showLoading();
-    void Promise.all([this.office.ready, ...loads]).then(() => { this.phase = 'title'; this.ui.loadingDone(game.hasSave()); });
+    const extras = [ASSETS.shared.bug, ASSETS.shared.hammer, ASSETS.shared.boss].map(f => preloadModel(this.office.scene, assetUrl(f)).catch(() => undefined));
+    void Promise.all([this.office.ready, ...loads, ...extras]).then(() => { this.phase = 'title'; this.ui.loadingDone(game.hasSave()); });
     this.engine.runRenderLoop(() => this.loop());
     window.addEventListener('resize', () => this.engine.resize());
   }
@@ -53,7 +58,8 @@ export class Game {
     const now = performance.now(), real = Math.min(.1, (now - this.last) / 1000), dt = real * this.timeScale; this.last = now;
     const cam = this.office.camera;
     if (this.phase === 'loading' || this.phase === 'title' || this.phase === 'intro') cam.alpha += real * .04; // plano cinematográfico
-    if (this.phase !== 'paused') for (const a of this.actors.values()) a.update(dt);
+    if (this.phase !== 'paused') { for (const a of this.actors.values()) a.update(dt); this.bugs.update(dt); this.boss.update(dt); }
+    this.shakeScreen();
     if (this.phase === 'playing' && !this.ui.modalOpen) this.tick(dt);
     this.moveCamera(real);
     this.office.scene.render();
@@ -87,9 +93,9 @@ export class Game {
     }
     if (Object.values(s.cats).some(c => c.stress > 80)) s.morale = Math.max(0, s.morale - dt * .4);
     if (s.outcome) return;
-    if (s.time >= DEADLINE) this.end(false, 'Se acabó la jornada y el cliente sigue esperando.');
-    else if (s.morale <= 0) this.end(false, 'El equipo perdió la moral y se fue a dormir la siesta.');
-    else if (s.bugs >= MAX_BUGS) this.end(false, 'Demasiados bugs: producción está en llamas.');
+    if (s.time >= DEADLINE) this.end(false, 'Se acabó la jornada sin entrega. Los bugs olvidados despertaron a BUGZILLA y tomó producción.');
+    else if (s.morale <= 0) this.end(false, 'El equipo se rindió y nadie vigiló producción. BUGZILLA aprovechó para salir.');
+    else if (s.bugs >= MAX_BUGS) this.end(false, 'Cinco bugs sueltos se fusionaron en BUGZILLA. Producción ha caído.');
     this.saveClock += dt; if (this.saveClock > 5) { this.saveClock = 0; game.save(); }
   }
 
@@ -111,9 +117,31 @@ export class Game {
     const s = game.get();
     const stars = !won ? 0 : s.bugs === 0 && s.morale >= 60 ? 3 : s.bugs <= 2 ? 2 : 1;
     s.outcome = { won, reason, stars }; this.phase = 'ended'; game.save();
-    won ? sfx.victory() : sfx.defeat();
-    this.goOverview();
-    window.setTimeout(() => this.ui.showEnd(s), 900);
+    if (won) { sfx.victory(); this.goOverview(); window.setTimeout(() => this.ui.showEnd(s), 900); return; }
+    this.summonBoss(s);
+  }
+
+  /** Derrota: suena la alarma y emerge el jefe final, BUGZILLA. */
+  private summonBoss(s: ReturnType<typeof game.get>) {
+    this.ui.closeModal(true); this.ui.hideHud(); this.ui.alert('¡PRODUCCIÓN CAÍDA!'); sfx.alarm();
+    // Los gatos dejan lo que estén haciendo y se quedan mirando.
+    for (const a of this.actors.values()) { if (!a.isSeated) a.goHome(() => a.face(BOSS.spot)); }
+    window.setTimeout(() => {
+      if (this.phase !== 'ended') return;
+      // Sale de cara a la cámara (que mira desde -Z).
+      this.boss.summon(Math.PI); this.bugs.absorb(BOSS.spot); sfx.roar();
+      for (const a of this.actors.values()) { a.face(BOSS.spot); a.cat.state = '¡¿Qué es ESO?!'; }
+      this.camGoal = { alpha: -Math.PI / 2 - .12, beta: 1.32, radius: 13, target: new Vector3(BOSS.spot.x, .4, BOSS.spot.z - 3) };
+      window.setTimeout(() => { if (this.phase === 'ended') this.ui.bossIntro(BOSS.name, BOSS.title); }, 1300);
+      window.setTimeout(() => { if (this.phase === 'ended') { sfx.defeat(); this.ui.showEnd(s); } }, 4700);
+    }, 1100);
+  }
+
+  /** Temblor de pantalla mientras el jefe emerge del suelo. */
+  private shakeScreen() {
+    const canvas = this.engine.getRenderingCanvas()!; const k = this.boss.rising;
+    if (k > 0) canvas.style.transform = `translate(${((Math.random() - .5) * 14 * k).toFixed(1)}px, ${((Math.random() - .5) * 14 * k).toFixed(1)}px)`;
+    else if (canvas.style.transform) canvas.style.transform = '';
   }
 
   // ───────────────────────── Acciones del jugador ─────────────────────────
@@ -137,8 +165,21 @@ export class Game {
     } else {
       cat.stress = Math.min(100, cat.stress + 15); s.budget = Math.max(0, s.budget - 8); s.morale = Math.max(0, s.morale - 8); s.bugs++;
       log(s, `⚠ Mala decisión en «${task.name}». Se coló un bug.`); sfx.error();
+      this.bugs.spawn(stationPoint(STATIONS[task.role], 0, -1.4));
+      window.setTimeout(() => this.ui.toast(`🐞 ¡Se escapó un bug! Haz clic en él para aplastarlo (−${SMASH_COST} presupuesto).`, 'bad'), 400);
     }
     game.save(); this.ui.update(s);
+  }
+
+  /** Aplasta un bug con el martillo a cambio de presupuesto. */
+  private smashBug(id: number) {
+    if (this.phase !== 'playing') return;
+    const s = game.get();
+    if (s.budget < SMASH_COST) { this.ui.toast(`Aplastar un bug cuesta ${SMASH_COST} de presupuesto.`, 'bad'); return; }
+    if (!this.bugs.smash(id)) return;
+    s.budget -= SMASH_COST; s.bugs = Math.max(0, s.bugs - 1); s.morale = Math.min(100, s.morale + 3);
+    log(s, '🔨 Bug aplastado. Producción respira.'); sfx.smash();
+    this.ui.toast(`🔨 ¡Bug aplastado! −${SMASH_COST} presupuesto`, 'good'); this.ui.update(s); game.save();
   }
 
   private coffee(role: Role) {
@@ -171,6 +212,8 @@ export class Game {
   private resetActors() {
     const s = game.get();
     for (const id of ROLES) { const a = this.actors.get(id)!; a.cat = s.cats[id]; a.sitAt(seatOf(STATIONS[id]), STATIONS[id].yaw); }
+    this.boss.dispose(); this.ui.hideBoss();
+    this.bugs.clear(); for (let i = 0; i < s.bugs; i++) this.bugs.spawn(new Vector3(2, 0, -2));
     this.office.drawBoard(s.tasks);
   }
   private newGame() { game.reset(); game.clearSave(); this.resetActors(); this.phase = 'intro'; this.office.camera.detachControl(); this.ui.showIntro(); }
@@ -185,6 +228,7 @@ export class Game {
     this.phase = paused ? 'paused' : 'playing'; this.ui.showPause(paused); if (paused) game.save();
   }
   private toTitle() {
+    this.boss.dispose(); this.ui.hideBoss(); this.bugs.clear();
     if (!game.get().outcome) game.save();
     this.phase = 'title'; this.office.camera.detachControl(); this.camGoal = { ...TITLE_POSE, target: TITLE_POSE.target.clone() };
     this.ui.showTitle(game.hasSave());
@@ -218,8 +262,11 @@ export class Game {
     canvas.addEventListener('pointerdown', cancelGoal); canvas.addEventListener('wheel', cancelGoal, { passive: true });
     this.office.scene.onPointerObservable.add(info => {
       if (info.type !== PointerEventTypes.POINTERPICK || this.phase !== 'playing' || this.ui.modalOpen) return;
-      const mesh = info.pickInfo?.pickedMesh; const id: string = mesh?.metadata?.pick ?? mesh?.name ?? '';
-      if (id === 'coffee-machine') this.coffee(game.get().selected);
+      // Los bugs tienen prioridad: se pueden aplastar aunque estén detrás de un mueble.
+      const scene = this.office.scene; const bugHit = scene.pick(scene.pointerX, scene.pointerY, m => m.name.startsWith('bug-hit-'));
+      const mesh = bugHit?.hit ? bugHit.pickedMesh : info.pickInfo?.pickedMesh; const id: string = mesh?.metadata?.pick ?? mesh?.name ?? '';
+      if (id.startsWith('bug-')) this.smashBug(Number(id.slice(4)));
+      else if (id === 'coffee-machine') this.coffee(game.get().selected);
       else if (id === 'board') this.openActiveTask();
       else if (/^(monitor|cat)-/.test(id)) {
         const role = id.replace(/^(monitor|cat)-/, '') as Role; const t = activeTask(game.get());

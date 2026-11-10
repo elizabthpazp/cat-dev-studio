@@ -16,6 +16,8 @@ export const SECONDS_PER_MINUTE = 0.5;
 export const MAX_BUGS = 5;
 export const COFFEE_COST = 4;
 export const COFFEE_COOLDOWN = 25;
+/** Presupuesto que cuesta aplastar un bug con el martillo. */
+export const SMASH_COST = 10;
 
 function fresh(): State {
   const cat = (id: Role, name: string, title: string, color: string, energy: number, stress: number): Cat => ({ id, name, title, energy, stress, xp: 0, color, state: 'En su puesto', coffeeCooldown: 0 });

@@ -11,8 +11,20 @@ export const ASSETS = {
     meetingChair: 'props/office_chair.glb',
     mug: 'props/coffee_cup.glb',
     pawMug: 'props/junior_coffee_cup.glb',
-    spareHeadset: 'props/junior_headsetphones.glb'
-  }
+    spareHeadset: 'props/junior_headsetphones.glb',
+    meetingTable: 'props/desk_natural.glb',
+    whiteboard: 'props/whiteboard.glb',
+    plant: 'props/indoor_plant.glb',
+    serverRack: 'props/server_rack.glb',
+    serverTower: 'props/server_tower.glb',
+    fileStorage: 'props/file_storage.glb',
+    organizer: 'props/desk_organizer.glb',
+    bug: 'props/bug.glb',
+    hammer: 'props/hammer.glb',
+    boss: 'props/final_boss_bug.glb'
+  },
+  /** Mesa de cada puesto. */
+  desks: { junior: 'props/desk_pink.glb', senior: 'props/desk_black.glb', pm: 'props/desk_natural.glb', qa: 'props/desk_natural.glb' }
 } as const;
 
 export type WorkstationSlot = keyof typeof ASSETS.workstations.junior;
@@ -26,7 +38,9 @@ export const MODEL_FIXES: Record<string, { yaw?: number; pitch?: number; roll?: 
   'props/pm_chair.glb': { yaw: Math.PI / 2 },          // viene mirando de lado (-X)
   'props/junior_keyboard.glb': { pitch: -0.906 },      // viene inclinado ~52° como foto de producto
   'props/computer_mouse.glb': { yaw: Math.PI },        // el cable/botones apuntan a -Z
-  'props/headset_phones.glb': { yaw: Math.PI / 2 }     // de pie con las orejeras en ±Z
+  'props/headset_phones.glb': { yaw: Math.PI / 2 },    // de pie con las orejeras en ±Z
+  'props/desk_black.glb': { yaw: Math.PI / 2 },        // su lado largo viene en Z
+  'props/server_rack.glb': { yaw: -Math.PI / 2 }       // fila de racks a lo largo de Z con el frente hacia +X → frente a +Z
 };
 
 export const assetUrl = (file: string) => `/assets/${file}`;
