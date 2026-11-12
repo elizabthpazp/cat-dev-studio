@@ -53,7 +53,9 @@ export const game = {
     try {
       const raw = localStorage.getItem(SAVE_KEY); if (!raw) return false;
       const data = JSON.parse(raw) as State; if (data.outcome) return false;
-      state = { ...fresh(), ...data };
+      const base = fresh(); state = { ...base, ...data, cats: { ...base.cats, ...data.cats } };
+      // Partidas guardadas por versiones anteriores pueden no traer todos los campos.
+      for (const id of ROLES) state.cats[id] = { ...base.cats[id], ...state.cats[id], coffeeCooldown: Number(state.cats[id].coffeeCooldown) || 0 };
       // Un hito a medias se retoma como pendiente para volver a lanzarlo con su pergamino.
       state.tasks.forEach(t => { if (t.status === 'working') { t.status = 'pending'; t.progress = 0; } });
       return true;

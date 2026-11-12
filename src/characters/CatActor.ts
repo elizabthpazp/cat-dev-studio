@@ -9,6 +9,8 @@ import { CAT_HEIGHT, SEATED_Y } from '../game/layout';
  */
 export class CatActor {
   root: TransformNode; target = new Vector3();
+  /** Sube cada vez que el gato recibe una orden nueva (caminar, volver, sentarse). Sirve para descartar órdenes viejas programadas con setTimeout. */
+  errand = 0;
   private bob = 0; private seated = false; private returnToSeat = false;
   private seat = new Vector3(); private seatYaw = 0; private arriveYaw?: number; private onArrive?: () => void; private celebrateT = 0;
   private modelPivot: TransformNode; private placeholder: TransformNode; private loaded = false;
@@ -40,17 +42,17 @@ export class CatActor {
 
   /** Lo sienta directamente en su silla mirando hacia `yaw` (hacia su PC). */
   sitAt(seat: Vector3, yaw: number) {
-    this.seat.copyFrom(seat); this.seatYaw = yaw; this.seated = true; this.returnToSeat = false; this.arriveYaw = undefined;
+    this.seat.copyFrom(seat); this.seatYaw = yaw; this.seated = true; this.returnToSeat = false; this.arriveYaw = undefined; this.onArrive = undefined; this.errand++;
     this.root.position.set(seat.x, SEATED_Y, seat.z); this.root.rotation.y = yaw; this.target.copyFrom(this.root.position);
   }
   /** Camina de vuelta a su silla y se sienta. */
-  goHome(onSeated?: () => void) { if (this.seated) { onSeated?.(); return; } this.target.set(this.seat.x, 0, this.seat.z); this.returnToSeat = true; this.onArrive = onSeated; }
+  goHome(onSeated?: () => void) { if (this.seated) { onSeated?.(); return; } this.errand++; this.target.set(this.seat.x, 0, this.seat.z); this.returnToSeat = true; this.onArrive = onSeated; }
   get isSeated() { return this.seated; }
   get isWalking() { return !this.seated && Vector3.DistanceSquared(new Vector3(this.target.x, 0, this.target.z), new Vector3(this.root.position.x, 0, this.root.position.z)) > .0036; }
   /** Pequeño salto de alegría (al terminar un hito). */
   celebrate() { this.celebrateT = 1.2; }
   /** Camina a un punto; si se indica `faceYaw`, al llegar se gira hacia allí. */
-  walkTo(position: Vector3, faceYaw?: number, onArrive?: () => void) { this.stand(); this.target.set(position.x, 0, position.z); this.returnToSeat = false; this.arriveYaw = faceYaw; this.onArrive = onArrive; }
+  walkTo(position: Vector3, faceYaw?: number, onArrive?: () => void) { this.stand(); this.target.set(position.x, 0, position.z); this.returnToSeat = false; this.arriveYaw = faceYaw; this.onArrive = onArrive; this.errand++; }
   private stand() { if (this.seated) { this.seated = false; this.root.position.y = 0; } }
 
   update(dt: number) {
@@ -60,7 +62,7 @@ export class CatActor {
       const want = Math.atan2(d.x, d.z); let diff = want - this.root.rotation.y; diff = Math.atan2(Math.sin(diff), Math.cos(diff)); this.root.rotation.y += diff * Math.min(1, dt * 12);
       this.pose('walk'); return;
     }
-    if (this.returnToSeat) { this.sitAt(this.seat, this.seatYaw); }
+    if (this.returnToSeat) { const cb = this.onArrive; this.sitAt(this.seat, this.seatYaw); this.onArrive = cb; }
     else if (this.arriveYaw !== undefined) { this.root.rotation.y = this.arriveYaw; this.arriveYaw = undefined; }
     if (this.onArrive) { const cb = this.onArrive; this.onArrive = undefined; cb(); }
     if (this.celebrateT > 0) { this.celebrateT -= dt; this.modelPivot.position.y = Math.abs(Math.sin(this.celebrateT * 9)) * .35; this.modelPivot.rotation.y = (1.2 - this.celebrateT) * Math.PI * 1.67; if (this.celebrateT <= 0) { this.modelPivot.position.y = 0; this.modelPivot.rotation.y = 0; } return; }

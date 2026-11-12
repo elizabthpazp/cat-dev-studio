@@ -22,6 +22,8 @@ export class Game {
   engine: Engine; office: OfficeScene; ui: GameUI; actors = new Map<Role, CatActor>(); bugs: BugSwarm; boss: BossBug;
   private phase: Phase = 'loading'; private last = performance.now(); private hudClock = 0; private minuteClock = 0; private saveClock = 0;
   private camGoal?: CamPose; private projection = Matrix.Identity();
+  /** Gatos que van de camino a la cafetera (el café ya está pagado). */
+  private coffeeTrips = new Set<Role>();
 
   constructor(canvas: HTMLCanvasElement, root: HTMLDivElement) {
     this.engine = new Engine(canvas, true, { stencil: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' }, false);
@@ -105,7 +107,7 @@ export class Game {
     s.budget += 12; s.morale = Math.min(100, s.morale + 5);
     log(s, `✓ ${t.name} terminado por ${cat.name}.`);
     actor.celebrate(); sfx.success(); this.office.drawBoard(s.tasks);
-    window.setTimeout(() => actor.goHome(() => { if (cat.state === '¡Hito cerrado!') cat.state = 'En su puesto'; }), 1300);
+    this.later(actor, 1300, () => actor.goHome(() => { if (cat.state === '¡Hito cerrado!') cat.state = 'En su puesto'; }));
     const next = activeTask(s);
     if (!next) { this.end(true, '¡Meowboard está en producción y nada explotó!'); return; }
     this.ui.toast(`✓ ${t.name} · Siguiente: ${next.name}`, 'good');
@@ -117,7 +119,7 @@ export class Game {
     const s = game.get();
     const stars = !won ? 0 : s.bugs === 0 && s.morale >= 60 ? 3 : s.bugs <= 2 ? 2 : 1;
     s.outcome = { won, reason, stars }; this.phase = 'ended'; game.save();
-    if (won) { sfx.victory(); this.goOverview(); window.setTimeout(() => this.ui.showEnd(s), 900); return; }
+    if (won) { sfx.victory(); this.goOverview(); window.setTimeout(() => { if (this.phase === 'ended' && game.get() === s) this.ui.showEnd(s); }, 900); return; }
     this.summonBoss(s);
   }
 
@@ -127,13 +129,13 @@ export class Game {
     // Los gatos dejan lo que estén haciendo y se quedan mirando.
     for (const a of this.actors.values()) { if (!a.isSeated) a.goHome(() => a.face(BOSS.spot)); }
     window.setTimeout(() => {
-      if (this.phase !== 'ended') return;
+      if (this.phase !== 'ended' || game.get() !== s) return;
       // Sale de cara a la cámara (que mira desde -Z).
       this.boss.summon(Math.PI); this.bugs.absorb(BOSS.spot); sfx.roar();
       for (const a of this.actors.values()) { a.face(BOSS.spot); a.cat.state = '¡¿Qué es ESO?!'; }
       this.camGoal = { alpha: -Math.PI / 2 - .12, beta: 1.32, radius: 13, target: new Vector3(BOSS.spot.x, .4, BOSS.spot.z - 3) };
-      window.setTimeout(() => { if (this.phase === 'ended') this.ui.bossIntro(BOSS.name, BOSS.title); }, 1300);
-      window.setTimeout(() => { if (this.phase === 'ended') { sfx.defeat(); this.ui.showEnd(s); } }, 4700);
+      window.setTimeout(() => { if (this.phase === 'ended' && game.get() === s) this.ui.bossIntro(BOSS.name, BOSS.title); }, 1300);
+      window.setTimeout(() => { if (this.phase === 'ended' && game.get() === s) { sfx.defeat(); this.ui.showEnd(s); } }, 4700);
     }, 1100);
   }
 
@@ -157,6 +159,7 @@ export class Game {
   private answer(id: string, ok: boolean) {
     const s = game.get(); const task = s.tasks.find(t => t.id === id)!; const cat = s.cats[task.role]; const actor = this.actors.get(task.role)!;
     if (ok) {
+      if (this.coffeeTrips.has(task.role)) { this.drinkCoffee(task.role); this.ui.toast(`☕ ${cat.name} se lleva el café al puesto. +30 energía`, 'good'); }
       task.status = 'working'; task.progress = 0; log(s, `${cat.name} empieza: ${task.name}.`); sfx.success();
       if (task.id === 'review') actor.walkTo(SPOTS.review.pos, SPOTS.review.yaw);
       else if (task.id === 'deploy') actor.walkTo(SPOTS.servers.pos, SPOTS.servers.yaw);
@@ -188,14 +191,26 @@ export class Game {
     if (task?.status === 'working' && task.role === role) { this.ui.toast(`${cat.name} está concentrado. Café después del hito.`, 'bad'); return; }
     if (cat.coffeeCooldown > 0) { this.ui.toast(`${cat.name} podrá tomar otro café en ${Math.ceil(cat.coffeeCooldown)} s.`, 'bad'); return; }
     if (s.budget < COFFEE_COST) { this.ui.toast('No queda presupuesto para café.', 'bad'); return; }
-    s.budget -= COFFEE_COST; cat.coffeeCooldown = COFFEE_COOLDOWN; cat.state = 'Yendo por café'; sfx.click();
+    s.budget -= COFFEE_COST; cat.coffeeCooldown = COFFEE_COOLDOWN; cat.state = 'Yendo por café'; sfx.click(); this.coffeeTrips.add(role);
     const offset = ROLES.indexOf(role) * .55 - .8;
     actor.walkTo(SPOTS.coffee.pos.add(new Vector3(offset, 0, 0)), SPOTS.coffee.yaw, () => {
-      cat.energy = Math.min(100, cat.energy + 30); cat.stress = Math.max(0, cat.stress - 15); s.morale = Math.min(100, s.morale + 2);
-      cat.state = 'Tomando café'; sfx.coin(); this.ui.toast(`☕ ${cat.name}: «Ahora sí compila.» +30 energía`, 'good');
-      window.setTimeout(() => actor.goHome(() => { cat.state = 'En su puesto'; }), 1600);
+      if (!this.coffeeTrips.has(role)) return;
+      this.drinkCoffee(role); cat.state = 'Tomando café'; sfx.coin(); this.ui.toast(`☕ ${cat.name}: «Ahora sí compila.» +30 energía`, 'good');
+      this.later(actor, 1600, () => actor.goHome(() => { cat.state = 'En su puesto'; }));
     });
     this.ui.update(s);
+  }
+
+  /** Aplica el efecto del café (una sola vez por viaje). */
+  private drinkCoffee(role: Role) {
+    const s = game.get(); const cat = s.cats[role]; this.coffeeTrips.delete(role);
+    cat.energy = Math.min(100, cat.energy + 30); cat.stress = Math.max(0, cat.stress - 15); s.morale = Math.min(100, s.morale + 2);
+  }
+
+  /** Programa una orden para un gato; se descarta si mientras tanto recibió otra orden o la partida cambió de fase. */
+  private later(actor: CatActor, ms: number, fn: () => void) {
+    const token = actor.errand;
+    window.setTimeout(() => { if (actor.errand === token && (this.phase === 'playing' || this.phase === 'paused')) fn(); }, ms);
   }
 
   private select(role: Role, focus: boolean) {
@@ -212,11 +227,11 @@ export class Game {
   private resetActors() {
     const s = game.get();
     for (const id of ROLES) { const a = this.actors.get(id)!; a.cat = s.cats[id]; a.sitAt(seatOf(STATIONS[id]), STATIONS[id].yaw); }
-    this.boss.dispose(); this.ui.hideBoss();
+    this.boss.dispose(); this.ui.hideBoss(); this.coffeeTrips.clear();
     this.bugs.clear(); for (let i = 0; i < s.bugs; i++) this.bugs.spawn(new Vector3(2, 0, -2));
     this.office.drawBoard(s.tasks);
   }
-  private newGame() { game.reset(); game.clearSave(); this.resetActors(); this.phase = 'intro'; this.office.camera.detachControl(); this.ui.showIntro(); }
+  private newGame() { game.reset(); game.clearSave(); this.resetActors(); this.phase = 'intro'; this.camGoal = { ...TITLE_POSE, target: TITLE_POSE.target.clone() }; this.office.camera.detachControl(); this.ui.showIntro(); }
   private continueGame() { if (!game.load()) { this.newGame(); return; } this.resetActors(); this.beginShift(); }
   private beginShift() {
     this.phase = 'playing'; this.minuteClock = 0; this.office.camera.attachControl(this.engine.getRenderingCanvas(), true); this.goOverview();
@@ -274,14 +289,14 @@ export class Game {
       }
     });
     window.addEventListener('keydown', e => {
-      if (e.repeat) return;
+      if (e.repeat || e.defaultPrevented) return;
       const k = e.key.toLowerCase();
       if (k === 'm') { this.ui.setMuted(sfx.toggle()); return; }
       if (this.phase !== 'playing' && this.phase !== 'paused') return;
       if (k === 'escape') { if (this.ui.modalOpen) this.ui.closeModal(); else this.setPaused(this.phase === 'playing'); return; }
       if (this.phase !== 'playing' || this.ui.modalOpen) return;
       if (k >= '1' && k <= '4') this.select(ROLES[Number(k) - 1], true);
-      else if (k === ' ' || k === 'enter') { e.preventDefault(); this.openActiveTask(); }
+      else if (k === ' ' || k === 'enter') { e.preventDefault(); (document.activeElement as HTMLElement | null)?.blur?.(); this.openActiveTask(); }
       else if (k === 'c') this.coffee(game.get().selected);
       else if (k === 'v') this.goOverview();
       else if (k === 'h') this.ui.toggleHelp();
