@@ -8,13 +8,35 @@ import { loadStats, preloadModel } from '../assets/ModelLoader';
 import { BugSwarm } from '../engine/Bugs';
 import { BOSS, BossBug } from '../engine/Boss';
 import { CAT_HEIGHT, SEATED_Y, SPOTS, STATIONS, seatOf, stationPoint } from './layout';
-import { COFFEE_COOLDOWN, COFFEE_COST, DEADLINE, MAX_BUGS, ROLES, Role, SECONDS_PER_MINUTE, SMASH_COST, Task, activeTask, game, log } from './store';
+import { COFFEE_COOLDOWN, COFFEE_COST, DEADLINE, MAX_BUGS, RATE_LIMIT_MAX, RATE_LIMIT_SKIP_COST, RATE_LIMIT_WAIT, ROLES, Role, SECONDS_PER_MINUTE, SMASH_COST, Task, activeTask, clock, game, log } from './store';
 
 type Phase = 'loading' | 'title' | 'intro' | 'playing' | 'paused' | 'ended';
 interface CamPose { alpha: number; beta: number; radius: number; target: Vector3; }
 const OVERVIEW: CamPose = { alpha: -Math.PI / 2 - 0.12, beta: 0.88, radius: 26, target: new Vector3(-1.6, 0, 1.2) };
 const TITLE_POSE: CamPose = { alpha: -Math.PI / 2 - 0.9, beta: 1.12, radius: 17, target: new Vector3(0, 1, 1) };
 const WORK_LABEL: Record<string, string> = { spec: 'Definiendo el encargo', feature: 'Programando', review: 'Revisando código', qa: 'Probando', deploy: 'Desplegando' };
+
+// ───────── Límite de uso de Claude ─────────
+/** Lo que el equipo le estaba pidiendo a Claude cuando se cortó (según el hito activo). */
+const LIMIT_PROMPT: Record<string, string> = {
+  spec: 'resume este brief de 40 páginas en una historia de usuario. el cliente dice que es "sencillito"',
+  feature: 'haz la feature. que funcione. y que no se rompa nada. gracias',
+  review: 'revisa este PR de 3.400 líneas y dime que está bien',
+  qa: 'escribe tests para todo. TODO. también para los tests',
+  deploy: 'despliega a producción un viernes a las 17:59, ¿qué podría salir mal?'
+};
+const LIMIT_REACTION: Record<Role, string> = { junior: '¿¡Cómo que 429!?', senior: 'Ah. Otra vez.', pm: '¿Eso estaba en el sprint?', qa: 'Lo sabía.' };
+const LIMIT_STATE: Record<Role, string> = { junior: 'Llorando en la cafetera', senior: 'Siesta sobre el teclado', pm: 'Plan B en la pizarra', qa: 'Yoga anti-429' };
+const LIMIT_QUIPS: Record<Role, string[]> = {
+  junior: ['¿Y ahora cómo se centra un div?', '¿Alguien me presta su cuenta de Claude?', 'Leyendo Stack Overflow como un cavernícola', 'Tercer café. Por la IA caída.', 'Voy a preguntarle a mi mamá'],
+  senior: ['Zzz…', 'En mis tiempos programábamos en Notepad… zzz', 'Zzz… git push --force… zzz', 'Despiértenme cuando vuelva Opus', 'Zzz… punto y coma… zzz'],
+  pm: ['Reunión urgente: ¿qué hacemos sin IA?', 'Moviendo tickets de columna con intención', 'Plan B: escribir código… ¿a mano?', 'Esto va a la retro, que conste', 'Story points: ∞'],
+  qa: ['Testing manual, como en 2015', 'Encontré 3 bugs sin IA. De nada.', 'Inhala tokens… exhala bugs…', 'Namasté, error 429', 'Postura del gato. Literal.']
+};
+const LIMIT_BACK: Record<Role, string> = { junior: '¡VOLVIÓ! ¡Le escribo YA!', senior: '¿Eh? Yo estaba revisando, eh…', pm: 'Bueno, como iba diciendo…', qa: 'Namasté. A romper cosas.' };
+/** Lugares a los que se van la PM y QA mientras no hay tokens. */
+const BREAK_SPOT = { pm: { pos: new Vector3(-9.9, 0, 5), yaw: -Math.PI / 2 }, qa: { pos: new Vector3(3, 0, -1.3), yaw: Math.PI } };
+interface RateLimit { left: number; waiting: boolean; quipT: number; quipI: number; yogaT: number; resetAt: string; }
 
 export class Game {
   /** Multiplicador de velocidad (solo para pruebas). */
@@ -24,6 +46,8 @@ export class Game {
   private camGoal?: CamPose; private projection = Matrix.Identity();
   /** Gatos que van de camino a la cafetera (el café ya está pagado). */
   private coffeeTrips = new Set<Role>();
+  /** Descanso forzoso por límite de uso de Claude (undefined = hay tokens). */
+  private limit?: RateLimit; private limitClock = 0; private nextLimit = 60; private limitsHit = 0;
 
   constructor(canvas: HTMLCanvasElement, root: HTMLDivElement) {
     this.engine = new Engine(canvas, true, { stencil: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' }, false);
@@ -77,13 +101,15 @@ export class Game {
     const s = game.get();
     this.minuteClock += dt; while (this.minuteClock >= SECONDS_PER_MINUTE) { this.minuteClock -= SECONDS_PER_MINUTE; s.time++; }
     const task = activeTask(s);
+    if (this.limit) this.tickLimit(dt);
+    else if (!s.outcome) { this.limitClock += dt; if (this.limitClock >= this.nextLimit && this.limitsHit < RATE_LIMIT_MAX && DEADLINE - s.time > 70) this.hitLimit(); }
     for (const c of Object.values(s.cats)) {
       c.coffeeCooldown = Math.max(0, c.coffeeCooldown - dt);
-      const busy = task?.status === 'working' && task.role === c.id;
+      const busy = !this.limit && task?.status === 'working' && task.role === c.id;
       if (busy) { c.energy = Math.max(5, c.energy - dt * 1.1); c.stress = Math.min(100, c.stress + dt * .15); }
       else { c.energy = Math.min(100, c.energy + dt * .3); c.stress = Math.max(0, c.stress - dt * .25); }
     }
-    if (task?.status === 'working') {
+    if (task?.status === 'working' && !this.limit) {
       const cat = s.cats[task.role]; const actor = this.actors.get(task.role)!;
       if (actor.isWalking) cat.state = 'De camino';
       else {
@@ -118,14 +144,14 @@ export class Game {
   private end(won: boolean, reason: string) {
     const s = game.get();
     const stars = !won ? 0 : s.bugs === 0 && s.morale >= 60 ? 3 : s.bugs <= 2 ? 2 : 1;
-    s.outcome = { won, reason, stars }; this.phase = 'ended'; game.save();
+    s.outcome = { won, reason, stars }; this.phase = 'ended'; this.clearLimit(); game.save();
     if (won) { sfx.victory(); this.goOverview(); window.setTimeout(() => { if (this.phase === 'ended' && game.get() === s) this.ui.showEnd(s); }, 900); return; }
     this.summonBoss(s);
   }
 
   /** Derrota: suena la alarma y emerge el jefe final, BUGZILLA. */
   private summonBoss(s: ReturnType<typeof game.get>) {
-    this.ui.closeModal(true); this.ui.hideHud(); this.ui.alert('¡PRODUCCIÓN CAÍDA!'); sfx.alarm();
+    this.ui.closeAllOverlays(); this.ui.hideHud(); this.ui.alert('¡PRODUCCIÓN CAÍDA!'); sfx.alarm();
     // Los gatos dejan lo que estén haciendo y se quedan mirando.
     for (const a of this.actors.values()) { if (!a.isSeated) a.goHome(() => a.face(BOSS.spot)); }
     window.setTimeout(() => {
@@ -146,11 +172,88 @@ export class Game {
     else if (canvas.style.transform) canvas.style.transform = '';
   }
 
+  // ───────────────────────── Límite de uso de Claude ─────────────────────────
+  /** Se acaban los tokens: todos sueltan el teclado y aparece el aviso de Claude. */
+  private hitLimit() {
+    const s = game.get(); const task = activeTask(s);
+    this.limitsHit++; this.limitClock = 0; this.nextLimit = 80 + Math.random() * 40;
+    const resetAt = clock(s.time + RATE_LIMIT_WAIT / SECONDS_PER_MINUTE);
+    this.limit = { left: RATE_LIMIT_WAIT, waiting: false, quipT: 2.4, quipI: 0, yogaT: 2.5, resetAt };
+    log(s, 'Claude: límite de uso alcanzado. Todo el equipo sin tokens.'); sfx.rateLimit();
+    for (const role of [...this.coffeeTrips]) this.drinkCoffee(role); // el café ya estaba pagado
+    for (const id of ROLES) this.ui.bubble(id, LIMIT_REACTION[id], 2300);
+    this.goOverview(); this.sendOnBreak(); this.ui.update(s);
+    window.setTimeout(() => {
+      if (!this.limit || this.phase !== 'playing') return;
+      this.ui.showRateLimit({
+        prompt: LIMIT_PROMPT[task?.id ?? 'feature'], resetAt, wait: RATE_LIMIT_WAIT, cost: RATE_LIMIT_SKIP_COST,
+        canSkip: game.get().budget >= RATE_LIMIT_SKIP_COST, weekly: Math.min(99, 61 + this.limitsHit * 12)
+      }, { wait: () => this.waitLimit(), skip: () => this.endLimit(true) });
+    }, 1400);
+  }
+
+  /** Cada gato se levanta a hacer otra cosa (el senior ni se levanta: se duerme). */
+  private sendOnBreak() {
+    const s = game.get();
+    for (const id of ROLES) {
+      const a = this.actors.get(id)!; s.cats[id].state = LIMIT_STATE[id];
+      if (id === 'junior') a.walkTo(SPOTS.coffee.pos.add(new Vector3(-.8, 0, 0)), SPOTS.coffee.yaw);
+      else if (id === 'senior') { if (a.isSeated) a.napping = true; else a.goHome(() => { if (this.limit) a.napping = true; }); }
+      else a.walkTo(BREAK_SPOT[id].pos, BREAK_SPOT[id].yaw);
+    }
+  }
+
+  private waitLimit() {
+    if (!this.limit) return;
+    this.limit.waiting = true; this.ui.toast(`Claude vuelve a las ${this.limit.resetAt}. El reloj sigue corriendo…`);
+    this.ui.rateBanner(this.limit.left, RATE_LIMIT_WAIT, game.get().budget >= RATE_LIMIT_SKIP_COST, () => this.endLimit(true));
+  }
+
+  private tickLimit(dt: number) {
+    const L = this.limit!; const s = game.get();
+    if ((L.quipT -= dt) <= 0) { L.quipT = 3.8; L.quipI++; ROLES.forEach((id, i) => { const q = LIMIT_QUIPS[id]; this.ui.bubble(id, q[(L.quipI + i) % q.length]); }); }
+    const qa = this.actors.get('qa')!; if ((L.yogaT -= dt) <= 0) { L.yogaT = 3; if (!qa.isWalking) qa.celebrate(); }
+    if (!L.waiting) return;
+    L.left -= dt; this.ui.rateBanner(Math.max(0, L.left), RATE_LIMIT_WAIT, s.budget >= RATE_LIMIT_SKIP_COST);
+    if (L.left <= 0) this.endLimit(false);
+  }
+
+  /** Se reinicia el límite (por espera o pagando el upgrade) y todos vuelven a su puesto. */
+  private endLimit(skipped: boolean) {
+    const s = game.get(); if (!this.limit || this.phase !== 'playing') return;
+    if (skipped && s.budget < RATE_LIMIT_SKIP_COST) { this.ui.toast(`El upgrade a Max cuesta ${RATE_LIMIT_SKIP_COST} de presupuesto.`, 'bad'); return; }
+    this.clearLimit(); sfx.rateReset();
+    if (skipped) { s.budget -= RATE_LIMIT_SKIP_COST; log(s, `Upgrade a Max (−${RATE_LIMIT_SKIP_COST}). Claude vuelve al instante.`); this.ui.toast(`✓ Upgrade a Max · −${RATE_LIMIT_SKIP_COST} presupuesto. Tokens recargados.`, 'good'); }
+    else { log(s, 'Se reinició el límite de uso. Claude vuelve.'); this.ui.toast('✓ Límite reiniciado · Claude vuelve a estar disponible', 'good'); }
+    const task = activeTask(s);
+    for (const id of ROLES) {
+      const a = this.actors.get(id)!; const cat = s.cats[id];
+      this.ui.bubble(id, LIMIT_BACK[id], 2400); cat.state = 'Volviendo al trabajo';
+      if (task?.status === 'working' && task.role === id) this.toWork(a, task);
+      else a.goHome(() => { if (cat.state === 'Volviendo al trabajo') cat.state = 'En su puesto'; });
+    }
+    this.ui.update(s); game.save();
+  }
+
+  /** Quita el descanso sin efectos (fin de partida, menú, reinicio). */
+  private clearLimit() {
+    this.limit = undefined; this.ui.hideRateLimit();
+    for (const a of this.actors.values()) a.napping = false;
+  }
+
+  /** Manda al gato al sitio donde se hace su hito. */
+  private toWork(actor: CatActor, task: Task) {
+    if (task.id === 'review') actor.walkTo(SPOTS.review.pos, SPOTS.review.yaw);
+    else if (task.id === 'deploy') actor.walkTo(SPOTS.servers.pos, SPOTS.servers.yaw);
+    else actor.goHome();
+  }
+
   // ───────────────────────── Acciones del jugador ─────────────────────────
   private openActiveTask() {
     if (this.phase !== 'playing') return;
     const s = game.get(); const task = activeTask(s);
     if (!task) return;
+    if (this.limit) { this.ui.toast('Sin tokens de Claude nadie se atreve a pensar. Espera el reinicio o salta la espera.', 'bad'); return; }
     if (task.status === 'working') { this.ui.toast(`${s.cats[task.role].name} ya está en ello (${Math.round(task.progress)}%).`); return; }
     this.select(task.role, true);
     sfx.open(); this.ui.openChallenge(task);
@@ -161,9 +264,7 @@ export class Game {
     if (ok) {
       if (this.coffeeTrips.has(task.role)) { this.drinkCoffee(task.role); this.ui.toast(`☕ ${cat.name} se lleva el café al puesto. +30 energía`, 'good'); }
       task.status = 'working'; task.progress = 0; log(s, `${cat.name} empieza: ${task.name}.`); sfx.success();
-      if (task.id === 'review') actor.walkTo(SPOTS.review.pos, SPOTS.review.yaw);
-      else if (task.id === 'deploy') actor.walkTo(SPOTS.servers.pos, SPOTS.servers.yaw);
-      else actor.goHome();
+      this.toWork(actor, task);
       this.office.drawBoard(s.tasks);
     } else {
       cat.stress = Math.min(100, cat.stress + 15); s.budget = Math.max(0, s.budget - 8); s.morale = Math.max(0, s.morale - 8); s.bugs++;
@@ -188,6 +289,7 @@ export class Game {
   private coffee(role: Role) {
     if (this.phase !== 'playing') return;
     const s = game.get(); const cat = s.cats[role]; const actor = this.actors.get(role)!; const task = activeTask(s);
+    if (this.limit) { this.ui.toast(`${cat.name} ya está de descanso forzoso. Sin tokens no hay prisa.`, 'bad'); return; }
     if (task?.status === 'working' && task.role === role) { this.ui.toast(`${cat.name} está concentrado. Café después del hito.`, 'bad'); return; }
     if (cat.coffeeCooldown > 0) { this.ui.toast(`${cat.name} podrá tomar otro café en ${Math.ceil(cat.coffeeCooldown)} s.`, 'bad'); return; }
     if (s.budget < COFFEE_COST) { this.ui.toast('No queda presupuesto para café.', 'bad'); return; }
@@ -226,7 +328,8 @@ export class Game {
   // ───────────────────────── Flujo de pantallas ─────────────────────────
   private resetActors() {
     const s = game.get();
-    for (const id of ROLES) { const a = this.actors.get(id)!; a.cat = s.cats[id]; a.sitAt(seatOf(STATIONS[id]), STATIONS[id].yaw); }
+    for (const id of ROLES) { const a = this.actors.get(id)!; a.cat = s.cats[id]; a.napping = false; a.sitAt(seatOf(STATIONS[id]), STATIONS[id].yaw); }
+    this.clearLimit(); this.limitsHit = 0; this.limitClock = 0; this.nextLimit = 55 + Math.random() * 20;
     this.boss.dispose(); this.ui.hideBoss(); this.coffeeTrips.clear();
     this.bugs.clear(); for (let i = 0; i < s.bugs; i++) this.bugs.spawn(new Vector3(2, 0, -2));
     this.office.drawBoard(s.tasks);
@@ -243,7 +346,7 @@ export class Game {
     this.phase = paused ? 'paused' : 'playing'; this.ui.showPause(paused); if (paused) game.save();
   }
   private toTitle() {
-    this.boss.dispose(); this.ui.hideBoss(); this.bugs.clear();
+    this.boss.dispose(); this.ui.hideBoss(); this.bugs.clear(); this.clearLimit();
     if (!game.get().outcome) game.save();
     this.phase = 'title'; this.office.camera.detachControl(); this.camGoal = { ...TITLE_POSE, target: TITLE_POSE.target.clone() };
     this.ui.showTitle(game.hasSave());

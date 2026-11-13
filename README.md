@@ -23,6 +23,7 @@ Tienes hasta las 18:00 para completar cinco hitos de un sprint real: definir el 
 
 - **Energía y estrés** — cada gato se desgasta mientras trabaja; si el estrés sube demasiado, la moral del equipo cae.
 - **Café** — envía a un gato a la máquina de café (+30 energía, −15 estrés) a cambio de presupuesto.
+- **Límite de uso de Claude** — cada cierto tiempo (máx. 3 por partida) al equipo se le acaban los tokens: todos sueltan el teclado y se van a hacer otra cosa. Puedes **esperar** 20 s (el reloj sigue corriendo) o **saltar la espera** con un upgrade a Max (−15 presupuesto).
 - **Decisiones técnicas** — cinco preguntas de programación real que determinan si el hito avanza limpio o introduce un bug.
 - **Condiciones de derrota** — se acaba la jornada, la moral llega a cero, o se acumulan 5 bugs en producción.
 - **Estrellas** — de 1 a 3 según los bugs acumulados y la moral final.

@@ -9,6 +9,11 @@ export interface UIHandlers {
   coffee(): void; overview(): void; pause(): void; resume(): void; restart(): void; quit(): void;
 }
 export interface TagInfo { role: Role; x: number; y: number; visible: boolean; }
+export interface RateLimitInfo { prompt: string; resetAt: string; wait: number; cost: number; canSkip: boolean; weekly: number; }
+
+/** Destello de Claude (asterisco de rayos irregulares). */
+const SPARK = `<svg class="rl-spark" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${Array.from({ length: 11 }, (_, i) => { const h = 8.6 + ((i * 7) % 4) * .9; return `<rect x="11.05" y="${(12 - h).toFixed(2)}" width="1.9" height="${h.toFixed(2)}" rx=".95" transform="rotate(${(i * 360 / 11 + (i % 2) * 6).toFixed(1)} 12 12)"/>`; }).join('')}</svg>`;
+const mmss = (sec: number) => { const t = Math.ceil(sec); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
 
 const PAW = `<svg viewBox="0 0 64 64" aria-hidden="true"><ellipse cx="32" cy="42" rx="14" ry="12"/><ellipse cx="14" cy="27" rx="6" ry="8"/><ellipse cx="25" cy="16" rx="6" ry="8"/><ellipse cx="39" cy="16" rx="6" ry="8"/><ellipse cx="50" cy="27" rx="6" ry="8"/></svg>`;
 /** Colores y nombres fijos de cada miembro (los mismos que en el estado inicial). */
@@ -46,6 +51,9 @@ export class GameUI {
   /** Atajos de teclado del pergamino abierto (A/B/C para responder). */
   private modalKeys?: (e: KeyboardEvent) => void;
   private tipTimer?: number;
+  /** Bocadillos de texto sobre cada gato y su temporizador de cierre. */
+  private bubbleTimers = new Map<Role, number>();
+  private rlBanner?: HTMLElement;
 
   constructor(private root: HTMLDivElement, private h: UIHandlers) {
     root.append(this.splash, this.loading, this.title, this.tagLayer, this.hud, this.modalLayer, this.toasts);
@@ -220,12 +228,81 @@ export class GameUI {
   // ───────────────────────── Etiquetas sobre los gatos ─────────────────────────
   private buildTags() {
     ROLES.forEach(r => {
-      const t = el('div', 'tag', `<div class="tag-in"><div class="tag-alert">!</div><div class="tag-bar"><i></i><span class="tag-pct"></span></div><div class="tag-pill"><span class="dot"></span>${['Michi Jr.', 'Gatardo', 'Michi PM', 'Doña QA'][ROLES.indexOf(r)]}</div><div class="tag-pin"></div></div>`);
+      const t = el('div', 'tag', `<div class="tag-in"><div class="tag-bubble"></div><div class="tag-alert">!</div><div class="tag-bar"><i></i><span class="tag-pct"></span></div><div class="tag-pill"><span class="dot"></span>${['Michi Jr.', 'Gatardo', 'Michi PM', 'Doña QA'][ROLES.indexOf(r)]}</div><div class="tag-pin"></div></div>`);
       t.style.setProperty('--c', COLOR[r]); this.tagLayer.append(t); this.tagEls.set(r, t);
     });
   }
   positionTags(tags: TagInfo[]) {
     for (const t of tags) { const e = this.tagEls.get(t.role)!; e.style.transform = `translate3d(${t.x.toFixed(1)}px, ${t.y.toFixed(1)}px, 0)`; e.style.visibility = t.visible ? 'visible' : 'hidden'; }
+  }
+
+  /** Bocadillo sobre un gato. Sin `ms` se queda hasta el siguiente; con `text` vacío se oculta. */
+  bubble(role: Role, text: string, ms?: number) {
+    const tag = this.tagEls.get(role); if (!tag) return;
+    window.clearTimeout(this.bubbleTimers.get(role));
+    const b = tag.querySelector<HTMLElement>('.tag-bubble')!;
+    if (!text) { tag.classList.remove('talk'); return; }
+    b.textContent = text; tag.classList.remove('talk'); void b.offsetWidth; tag.classList.add('talk');
+    if (ms) this.bubbleTimers.set(role, window.setTimeout(() => tag.classList.remove('talk'), ms));
+  }
+
+  // ───────────────────────── Límite de uso de Claude ─────────────────────────
+  /** Aviso de límite de uso con el aspecto de Claude: terminal de Claude Code + tarjeta de uso. */
+  showRateLimit(info: RateLimitInfo, on: { wait(): void; skip(): void }) {
+    this.closeModal(true); this.hideRateLimit(false);
+    const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const shade = el('div', 'shade scroll-shade rl-shade', `<div class="rl-card" role="alertdialog" aria-modal="true" aria-labelledby="rl-title" aria-describedby="rl-desc">
+      <div class="rl-top">${SPARK}<span class="rl-brand">Claude</span><span class="rl-plan">Plan Pro · Michis Devs</span></div>
+      <div class="rl-term" aria-hidden="true">
+        <div class="rl-term-bar"><i></i><i></i><i></i><span>~/meowboard — claude</span></div>
+        <div class="rl-line"><span class="rl-gt">&gt;</span><span>${esc(info.prompt)}</span></div>
+        <div class="rl-line rl-think"><span class="rl-star">✻</span><span>Pensando… <em>(↑ 1.2M tokens)</em></span></div>
+        <div class="rl-line rl-err"><span class="rl-elbow">⎿</span><span>5-hour limit reached ∙ resets ${info.resetAt}</span></div>
+        <div class="rl-line rl-dim"><span></span><span>/upgrade to increase your usage limit.</span></div>
+      </div>
+      <div class="rl-body">
+        <h2 id="rl-title">Has alcanzado tu límite de uso</h2>
+        <p id="rl-desc">Tu equipo gastó todos los tokens. El límite se reinicia a las <b>${info.resetAt}</b> (hora de la oficina). Mientras tanto, nadie sabe programar.</p>
+        <div class="rl-usage">
+          <div class="rl-row"><span>Sesión actual (5 h)</span><b>100% usado</b></div><div class="rl-meter full"><i style="--w:100%"></i></div>
+          <div class="rl-row"><span>Límite semanal</span><b>${info.weekly}% usado</b></div><div class="rl-meter"><i style="--w:${info.weekly}%"></i></div>
+        </div>
+        <div class="rl-actions">
+          <button class="rl-btn secondary" data-rl="skip" ${info.canSkip ? '' : 'disabled'}><span>Saltar espera</span><small>${info.canSkip ? `Upgrade a Max · −${info.cost} presupuesto` : 'Sin presupuesto para Max'}</small></button>
+          <button class="rl-btn primary" data-rl="wait"><span>Esperar ${info.wait} s</span><small>El reloj sigue corriendo</small></button>
+        </div>
+      </div></div>`);
+    this.modalLayer.append(shade); this.modalOpen = true; this.closeCurrent = undefined;
+    const choose = (act: string) => {
+      if (act === 'skip' && !info.canSkip) return;
+      sfx.click(); this.closeModal(true);
+      if (act === 'wait') on.wait(); else on.skip();
+    };
+    shade.addEventListener('click', e => { const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-rl]'); if (b && !b.disabled) choose(b.dataset.rl!); });
+    this.modalKeys = e => { if (e.key === 'Enter' && !e.repeat) { e.preventDefault(); choose((document.activeElement as HTMLElement)?.dataset?.rl ?? 'wait'); } };
+    window.setTimeout(() => shade.querySelector<HTMLButtonElement>('[data-rl="wait"]')?.focus(), 450);
+  }
+
+  /** Barra de cuenta atrás mientras el equipo espera el reinicio del límite. */
+  rateBanner(left: number, total: number, canSkip: boolean, onSkip?: () => void) {
+    if (!this.rlBanner) {
+      const b = el('div', 'rl-banner', `${SPARK}<div class="rl-b-main"><div class="rl-b-text"><b>Sin tokens</b><span>Claude vuelve en <time class="rl-left"></time></span></div><div class="rl-b-bar"><i></i></div></div>
+        <button class="rl-btn primary small" data-rl="skip"><span>Saltar</span></button>`);
+      b.querySelector('button')!.addEventListener('click', e => { (e.currentTarget as HTMLElement).blur(); sfx.click(); onSkip?.(); });
+      this.root.append(b); this.root.classList.add('rl-on'); this.rlBanner = b;
+    }
+    const b = this.rlBanner;
+    b.querySelector('.rl-left')!.textContent = mmss(left);
+    (b.querySelector('.rl-b-bar i') as HTMLElement).style.width = `${(1 - left / total) * 100}%`;
+    const btn = b.querySelector<HTMLButtonElement>('button')!; btn.disabled = !canSkip;
+    btn.title = canSkip ? 'Upgrade a Max: Claude vuelve ya' : 'No queda presupuesto para el upgrade';
+  }
+
+  hideRateLimit(bubbles = true) {
+    this.rlBanner?.remove(); this.rlBanner = undefined; this.root.classList.remove('rl-on');
+    const shade = this.modalLayer.querySelector('.rl-shade');
+    if (shade) { shade.remove(); if (!this.modalLayer.querySelector('.scroll-shade')) { this.modalOpen = false; this.modalKeys = undefined; } }
+    if (bubbles) for (const r of ROLES) this.bubble(r, '');
   }
 
   // ───────────────────────── Pergaminos ─────────────────────────
@@ -283,7 +360,7 @@ export class GameUI {
       onAction: (act, btn) => {
         if (act === 'opt') pick(btn);
         else if (act === 'close') { sfx.click(); this.closeModal(); }
-        else if (act === 'retry') { sfx.click(); this.closeModal(true); window.setTimeout(() => this.openChallenge(task), 60); }
+        else if (act === 'retry') { sfx.click(); this.closeModal(true); window.setTimeout(() => { if (this.hud.classList.contains('is-on')) this.openChallenge(task); }, 60); }
       }
     });
     this.modalKeys = e => {
@@ -322,6 +399,14 @@ export class GameUI {
 
   hideHud() { this.hud.classList.remove('is-on'); this.tagLayer.classList.remove('is-on'); }
 
+  /** Cierra cualquier pergamino, aviso o menú abierto (al salir el jefe final no debe taparlo nada). */
+  closeAllOverlays() {
+    this.closeModal(true); this.hideRateLimit();
+    this.modalLayer.querySelectorAll('.shade:not(.end)').forEach(e => e.remove());
+    this.modalOpen = false; this.closeCurrent = undefined; this.modalKeys = undefined;
+    (document.activeElement as HTMLElement | null)?.blur?.();
+  }
+
   /** Aviso rojo a pantalla completa (alarma de producción). */
   alert(text: string) {
     this.root.querySelector('.alarm')?.remove();
@@ -331,7 +416,7 @@ export class GameUI {
 
   /** Presentación del jefe final, como en los videojuegos: nombre gigante y barra de vida. */
   bossIntro(name: string, title: string) {
-    this.hideBoss();
+    this.hideBoss(); this.closeAllOverlays();
     const b = el('div', 'boss-intro', `<div class="boss-card"><small>¡HA APARECIDO EL JEFE FINAL!</small><h1>${name}</h1><p>${title}</p></div>
       <div class="boss-bar"><div class="boss-bar-name">${icon('bug')} ${name} <span>Nv. 99</span></div><div class="boss-hp"><i></i></div></div>`);
     this.root.append(b);

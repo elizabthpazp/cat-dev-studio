@@ -27,6 +27,9 @@ export const sfx = {
   coin: () => { tone(988, .08, 'square', .03); tone(1319, .2, 'square', .03, .07); },
   victory: () => [523, 659, 784, 1047].forEach((f, i) => tone(f, .35, 'triangle', .07, i * .14)),
   defeat: () => [392, 330, 262, 196].forEach((f, i) => tone(f, .4, 'triangle', .06, i * .18)),
+  /** Trombón triste: se acabaron los tokens. */
+  rateLimit: () => { [392, 370, 349].forEach((f, i) => tone(f, .34, 'sawtooth', .035, i * .38)); tone(330, 1, 'sawtooth', .035, 1.14, .88); },
+  rateReset: () => { tone(660, .12, 'sine', .05); tone(880, .12, 'sine', .05, .1); tone(1320, .35, 'sine', .05, .2); },
   get muted() { return muted; },
   toggle() { muted = !muted; try { localStorage.setItem('cat-dev-muted', muted ? '1' : '0'); } catch { /* nada */ } return muted; }
 };

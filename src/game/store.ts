@@ -18,6 +18,10 @@ export const COFFEE_COST = 4;
 export const COFFEE_COOLDOWN = 25;
 /** Presupuesto que cuesta aplastar un bug con el martillo. */
 export const SMASH_COST = 10;
+/** Límite de uso de Claude: segundos reales de espera, coste de saltarlo (upgrade a Max) y máximo de veces por partida. */
+export const RATE_LIMIT_WAIT = 20;
+export const RATE_LIMIT_SKIP_COST = 15;
+export const RATE_LIMIT_MAX = 3;
 
 function fresh(): State {
   const cat = (id: Role, name: string, title: string, color: string, energy: number, stress: number): Cat => ({ id, name, title, energy, stress, xp: 0, color, state: 'En su puesto', coffeeCooldown: 0 });

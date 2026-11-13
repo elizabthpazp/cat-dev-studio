@@ -11,6 +11,8 @@ export class CatActor {
   root: TransformNode; target = new Vector3();
   /** Sube cada vez que el gato recibe una orden nueva (caminar, volver, sentarse). Sirve para descartar órdenes viejas programadas con setTimeout. */
   errand = 0;
+  /** Dormido sobre el teclado (solo tiene efecto sentado). */
+  napping = false;
   private bob = 0; private seated = false; private returnToSeat = false;
   private seat = new Vector3(); private seatYaw = 0; private arriveYaw?: number; private onArrive?: () => void; private celebrateT = 0;
   private modelPivot: TransformNode; private placeholder: TransformNode; private loaded = false;
@@ -78,7 +80,7 @@ export class CatActor {
     if (!this.loaded) return;
     const t = performance.now() / 1000;
     this.modelPivot.rotation.z = mode === 'walk' ? Math.sin(t * 10) * .06 : 0;
-    this.modelPivot.rotation.x = mode === 'typing' ? .06 + Math.sin(t * 4) * .015 : 0;
+    this.modelPivot.rotation.x = mode === 'typing' ? (this.napping ? .34 + Math.sin(t * 1.3) * .025 : .06 + Math.sin(t * 4) * .015) : 0;
     this.modelPivot.position.y = mode === 'walk' ? Math.abs(Math.sin(t * 10)) * .05 : 0;
   }
 }
